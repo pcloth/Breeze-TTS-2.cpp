@@ -3,6 +3,7 @@
 #include "breeze/text_encoder.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <random>
 
@@ -90,6 +91,12 @@ static bool generate_chunk(BreezeModel & m, MimiCodec & codec, const GenRequest 
     };
 
     std::mt19937 rng(seed);
+    codec.reset_stream();
+    const char * inc_option = std::getenv("BREEZE_CODEC_INCREMENTAL");
+    const bool incremental = inc_option && std::string(inc_option)=="1";
+    const char * ref_option = std::getenv("BREEZE_REF_CONTEXT");
+    const bool reference_context = !ref_option || std::string(ref_option)!="0";
+    bool primed = false;
     const int nc = m.cfg.num_codebooks;
     const int spf = m.cfg.samples_per_frame;
     const bool has_ref = !ref.codes.empty() && !ref.text.empty();
@@ -159,16 +166,35 @@ static bool generate_chunk(BreezeModel & m, MimiCodec & codec, const GenRequest 
             if (!full && !early) break;
             const int start = emitted;
             const int count = full && !final_flush ? chunk : have - emitted;
-            const int ctx_start = start > ctx ? start - ctx : 0;
-            const int sub_T = start + count - ctx_start;
-            std::vector<int> sub(frames.begin() + (size_t) ctx_start * nc, frames.begin() + (size_t) (start + count) * nc);
             const auto tv = clock_now();
-            std::vector<float> audio = codec.decode(sub, sub_T);
+            std::vector<float> audio;
+            int skip = 0, sub_T = count;
+            if (incremental) {
+                if (!primed) {
+                    if (reference_context && has_ref) codec.prime_stream(ref_codes);
+                    primed = true;
+                }
+                std::vector<int> sub(frames.begin()+(size_t)start*nc,frames.begin()+(size_t)(start+count)*nc);
+                audio = codec.decode_streaming(sub,count);
+            } else {
+                // The generated codes depend on the reference. Give the causal
+                // codec that same left context, then drop ONLY reference PCM.
+                int prefix = reference_context && has_ref ? std::min(ctx,ref_T) : 0;
+                std::vector<int> history(ref_codes.end()-(size_t)prefix*nc,ref_codes.end());
+                history.insert(history.end(),frames.begin(),frames.begin()+(size_t)(start+count)*nc);
+                int absolute = prefix+start;
+                int lo = std::max(0,absolute-ctx);
+                sub_T = absolute+count-lo;
+                std::vector<int> sub(history.begin()+(size_t)lo*nc,history.end());
+                audio = codec.decode(sub,sub_T);
+                skip = (absolute-lo)*spf;
+            }
             const double vtime = since(tv);
             tm.vocoder += vtime;
             ema(clock.voc_ms, vtime / sub_T);
             tm.flushes++;
-            const int skip = (start - ctx_start) * spf;
+            if (audio.size() != (size_t)skip+(size_t)count*spf)
+                throw std::runtime_error("codec stream sample count mismatch");
             if (!tm.first_audio) {
                 tm.first_vocoder = vtime;
                 tm.first_frames = sub_T;
@@ -227,9 +253,11 @@ static bool generate_chunk(BreezeModel & m, MimiCodec & codec, const GenRequest 
     if (use_cfg) st_u.free();
     depth.free();
 
+    if (req.on_codes) req.on_codes(frames);
     out.codes = std::move(frames);
     out.n_frames = (int) out.codes.size() / nc;
     out.text = text;
+    codec.reset_stream();
     return !stopped;
 }
 

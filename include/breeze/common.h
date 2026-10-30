@@ -39,6 +39,7 @@ struct KVCache {
 struct Graph {
     ggml_context * ctx = nullptr;
     ggml_cgraph * gf = nullptr;
+    bool precise_matmul = false;
     ggml_gallocr_t alloc = nullptr;
     std::vector<std::pair<ggml_tensor *, std::vector<uint8_t>>> pending;
     std::vector<ggml_tensor *> extra_roots;

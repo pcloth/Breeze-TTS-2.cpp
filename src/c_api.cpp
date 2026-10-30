@@ -52,6 +52,7 @@ breeze_context * breeze_init(const char * gguf_path, int use_gpu) {
 
 void breeze_free(breeze_context * ctx) {
     if (ctx) {
+        ctx->codec.clear_cache();
         ctx->model.free();
         delete ctx;
     }

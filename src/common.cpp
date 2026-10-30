@@ -89,6 +89,12 @@ void Graph::compute(Backend & be, ggml_tensor * out) {
     ggml_set_output(out);
     for (ggml_tensor * r : extra_roots) ggml_build_forward_expand(gf, r);
     ggml_build_forward_expand(gf, out);
+    if (precise_matmul) {
+        for (int i=0;i<ggml_graph_n_nodes(gf);i++) {
+            auto * node=ggml_graph_node(gf,i);
+            if (node->op==GGML_OP_MUL_MAT) ggml_mul_mat_set_prec(node,GGML_PREC_F32);
+        }
+    }
     if (!ggml_gallocr_alloc_graph(be.alloc, gf)) {
         ggml_gallocr_free(be.alloc);
         be.alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(be.backend));
@@ -107,6 +113,12 @@ void Graph::prepare(Backend & be, ggml_tensor * out) {
     for (auto & pr : pending) ggml_set_output(pr.first);
     for (ggml_tensor * r : extra_roots) ggml_build_forward_expand(gf, r);
     ggml_build_forward_expand(gf, out);
+    if (precise_matmul) {
+        for (int i=0;i<ggml_graph_n_nodes(gf);i++) {
+            auto * node=ggml_graph_node(gf,i);
+            if (node->op==GGML_OP_MUL_MAT) ggml_mul_mat_set_prec(node,GGML_PREC_F32);
+        }
+    }
     alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(be.backend));
     if (!ggml_gallocr_alloc_graph(alloc, gf)) throw std::runtime_error("could not allocate cached inference graph");
     for (auto & pr : pending)

@@ -112,6 +112,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
     printf("wrote %s (%.2f s)\n", output.c_str(), (float) audio.size() / model.cfg.sample_rate);
+    codec.clear_cache();
     model.free();
     return 0;
 }

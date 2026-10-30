@@ -36,6 +36,8 @@ struct GenRequest {
     int split_chars = 600;
     // send a short chunk early when the listener is about to run dry, pointless when writing a file
     bool pace = true;
+    // Optional diagnostics hook; no text/audio is persisted unless supplied.
+    std::function<void(const std::vector<int> &)> on_codes;
 };
 
 // when the listener's audio runs out, assuming playback starts the moment a chunk lands

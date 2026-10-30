@@ -3,13 +3,28 @@
 #include "breeze/model.h"
 
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace breeze {
 
+struct CodecStreamState;
 struct MimiCodec {
     BreezeModel * m = nullptr;
-    void init(BreezeModel & model) { m = &model; }
+    std::unique_ptr<Graph> cached_graph;
+    std::vector<ggml_tensor *> cached_ids;
+    ggml_tensor * cached_audio = nullptr;
+    int cached_T = 0, cached_cb = 0;
+    bool cached_fast = false, cached_precise = false;
+    void clear_cache() { cached_graph.reset(); cached_ids.clear(); cached_audio = nullptr; }
+    std::shared_ptr<CodecStreamState> stream_state, primed_state;
+    std::vector<int> primed_codes;
+    bool primed_fast = false, primed_precise = false;
+    void trim_workspace();
+    void reset_stream() { stream_state.reset(); clear_cache(); trim_workspace(); }
+    void init(BreezeModel & model) { clear_cache(); reset_stream(); primed_state.reset(); primed_codes.clear(); m = &model; }
+    std::vector<float> decode_streaming(const std::vector<int> & codes, int frames);
+    void prime_stream(const std::vector<int> & reference);
 
     // codes frame-major [f * n_cb + cb]; n_cb 0 means the full set. fewer codebooks drops detail,
     // 1 leaves only the semantic stage

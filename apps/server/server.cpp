@@ -8,6 +8,9 @@
 #include "breeze/audio.h"
 #include "breeze/generation.h"
 #include "breeze/model.h"
+#include "breeze/voice.h"
+#include <algorithm>
+#include <cstdlib>
 
 #include "httplib.h"
 #include "breeze_webui_assets.h"
@@ -139,6 +142,33 @@ int run_server(const ServerOptions & opts) {
 
     VoiceStore store;
     store.load_dir(opts.voices_dir, model.cfg.num_codebooks);
+    // Compile representative text/prefill shapes before announcing readiness,
+    // and prime only the first approved voice (one bounded host-state slot).
+    if (opts.warmup && model.backend.is_gpu) {
+        auto saved = load_voice_dir(opts.voices_dir);
+        std::sort(saved.begin(),saved.end(),[](const Voice&a,const Voice&b){return a.name<b.name;});
+        if (!saved.empty()) {
+            GenRequest probe;
+            probe.ref_codes=saved.front().codes;probe.ref_frames=saved.front().frames;
+            probe.ref_text=saved.front().text;probe.chunk_first=opts.chunk_first;probe.chunk_max=opts.chunk_max;
+            probe.instruction="语气温柔自然，语速适中，清晰地讲述。";
+            for(int i=0;i<10;i++)probe.text+="清晨阳光照进窗边，人们开始一天的生活。";
+            probe.split_chars=4096;probe.max_new_tokens=1;probe.pace=false;
+            const AudioCallback drop=[](const float*,int){return true;};
+            try {
+                generate(model,codec,probe,drop);
+                probe.cfg_scale=3.0f;generate(model,codec,probe,drop);
+                const char * inc=std::getenv("BREEZE_CODEC_INCREMENTAL");
+                if(inc && std::string(inc)=="1")codec.prime_stream(probe.ref_codes);
+                codec.reset_stream();
+                printf("prepared initial voice and long-text pipelines\n");
+            } catch(const std::exception&e) {
+                // A failed warmup must not masquerade as a ready optimized server.
+                fprintf(stderr,"voice warmup failed: %s\n",e.what());
+                codec.clear_cache();model.free();return 1;
+            }
+        }
+    }
     store.add_routes(svr, model, codec, *mutex, opts.voices_dir);
 
     WsServer ws;
@@ -152,7 +182,7 @@ int run_server(const ServerOptions & opts) {
     }
 
     svr.Get("/health", [&](const httplib::Request &, httplib::Response & res) {
-        res.set_content("{\"status\":\"ok\",\"sample_rate\":" + std::to_string(sr) +
+        res.set_content("{\"status\":\"ok\",\"qing_native_codec\":1,\"sample_rate\":" + std::to_string(sr) +
                         ",\"ws_port\":" + std::to_string(ws_port > 0 ? ws_port : 0) + "}",
                         "application/json");
     });
@@ -416,6 +446,7 @@ int run_server(const ServerOptions & opts) {
         fprintf(stderr, "failed to bind %s:%d\n", opts.host.c_str(), opts.port);
         return 1;
     }
+    codec.clear_cache();
     model.free();
     return 0;
 }

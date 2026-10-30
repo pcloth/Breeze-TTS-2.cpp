@@ -1,6 +1,8 @@
 #include "breeze/codec.h"
+#include "codec_stream.h"
 
 #include <string>
+#include <cstdlib>
 #include <vector>
 
 namespace breeze {
@@ -9,6 +11,19 @@ namespace codec_detail {
 ggml_tensor * conv1d_causal(ggml_context * ctx, ggml_tensor * w, ggml_tensor * b,
                             ggml_tensor * x, int stride, int dilation) {
     const int K = (int) w->ne[0];
+    if (active_codec_stream && stride == 1 && K > 1)
+        return active_codec_stream->conv(ctx,w,b,x,dilation);
+    const char * fast = std::getenv("BREEZE_FASTCONV");
+    if (K == 1 && stride == 1 && fast && std::string(fast) == "1") {
+        // The old im2col path rounds activations to F16. Retain that rounding
+        // while avoiding im2col's expanded temporary and generic convolution.
+        auto * channels = ggml_cont(ctx, ggml_transpose(ctx, x));
+        channels = ggml_cast(ctx, channels, GGML_TYPE_F16);
+        auto * weights = ggml_reshape_2d(ctx, w, w->ne[1], w->ne[2]);
+        auto * y = ggml_mul_mat(ctx, channels, weights);
+        if (b) y = ggml_add(ctx, y, ggml_reshape_2d(ctx, b, 1, b->ne[0]));
+        return y;
+    }
     int pad = (K - 1) * dilation - (stride - 1);
     if (pad < 0) pad = 0;
     if (!ggml_is_contiguous(x)) x = ggml_cont(ctx, x);
@@ -23,6 +38,7 @@ ggml_tensor * conv1d_causal(ggml_context * ctx, ggml_tensor * w, ggml_tensor * b
 
 ggml_tensor * convtr1d_causal(ggml_context * ctx, ggml_tensor * w, ggml_tensor * b,
                               ggml_tensor * x, int stride) {
+    if (active_codec_stream) return active_codec_stream->convtr(ctx,w,b,x,stride);
     ggml_tensor * y = ggml_conv_transpose_1d(ctx, w, x, stride, 0, 1);
     const int keep = (int) x->ne[0] * stride;
     y = ggml_cont(ctx, ggml_view_2d(ctx, y, keep, y->ne[1], y->nb[1], 0));
@@ -42,6 +58,7 @@ ggml_tensor * resnet_block(ggml_context * ctx, BreezeModel & m, const std::strin
 // x is [L, C], w is [C, K]
 ggml_tensor * depthwise1d_causal(ggml_context * ctx, ggml_tensor * w, ggml_tensor * b,
                                  ggml_tensor * x, int K) {
+    if (active_codec_stream) return active_codec_stream->depthwise(ctx,w,b,x,K);
     const int64_t L = x->ne[0];
     const int64_t C = x->ne[1];
     ggml_tensor * xp = ggml_pad_ext(ctx, x, 0, K - 1, 0, 0, 0, 0, 0, 0);

@@ -145,7 +145,8 @@ int main(int argc, char ** argv) {
         if (!save_voice(path, v)) { fprintf(stderr, "failed to write %s\n", path.c_str()); return 1; }
         printf("wrote %s (%d frames, %.2f s)\n", path.c_str(), v.frames,
                (double) v.frames * model.cfg.samples_per_frame / v.sample_rate);
-        model.free();
+        codec.clear_cache();
+    model.free();
         return 0;
     }
 
@@ -177,6 +178,7 @@ int main(int argc, char ** argv) {
 
     if (!write_wav(output, audio, model.cfg.sample_rate)) { fprintf(stderr, "failed to write %s\n", output.c_str()); return 1; }
     printf("wrote %s (%.2f s)\n", output.c_str(), (float) audio.size() / model.cfg.sample_rate);
+    codec.clear_cache();
     model.free();
     return 0;
 }
